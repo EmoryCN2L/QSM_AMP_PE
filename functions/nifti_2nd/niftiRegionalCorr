@@ -1,0 +1,43 @@
+function [calcCorr,d,coef,fitedD] = niftiRegionalCorr(iname1, iname2, maskName, radius, oname)
+%This function calculates local correlation between two images in a region specified
+%function niftiRegionalCorr(iname1, iname2,maskName, oname)
+%For each voxel, voxels within a specified radius will be used for the calculation of correlation coeffecient
+%iname1, first input image
+%iname2, second input image
+%maskName, mask specifying where to calculate the regional correlation
+%radius, radius of voxels used for the calculation
+%oname, outputname
+
+hdr1 = spm_vol(iname1);
+hdr2 = spm_vol(iname2);
+
+im1 = spm_read_vols(hdr1);
+im2 = spm_read_vols(hdr2);
+
+
+mask = spm_read_vols(spm_vol(maskName));
+if(~isequal(size(im1),size(im2))||~isequal(size(im1),size(mask)))
+    error('Incompatible image dimensions');
+end
+d = [im1(mask>0.5),im2(mask>0.5)];
+coef = [ones(size(d,1),1),d(:,1)]\d(:,2);
+fitedD = coef(1)+coef(2)*d(:,1);
+calcCorr = corrcoef(d);
+calcCorr = calcCorr(2,1);
+return;
+
+function r = isCompatible(hdr1,hdr2)
+if(~iseuqal(hdr1.dim,hdr2.dim))
+    r = false;
+    return;
+end;
+
+if(any(abs(hdr1.mat-hdr2.mat)>0.1))
+    r = false;
+    return;
+end;
+r = true;
+
+return;
+
+

@@ -1,0 +1,20 @@
+function [ rMat ] = quaterion2mat(b,c,d)
+%transform quanterion to 3x3 matrix
+%function [ rMat ] = quaterion2mat(b,c,d)
+%
+%
+%@copyright
+ss = b^2+c^2+d^2;
+
+if(ss>1)
+    error('sum of square of b, c, d required to be less than 1');
+end;
+
+a = sqrt(1-ss);
+rMat = [a*a+b*b-c*c-d*d, 2*b*c-2*a*d, 2*b*d+2*a*c;
+        2*b*c+2*a*d, a*a+c*c-b*b-d*d, 2*c*d-2*a*b;
+        2*b*d-2*a*c, 2*c*d+2*a*b, a*a+d*d-c*c-b*b];
+
+
+end
+

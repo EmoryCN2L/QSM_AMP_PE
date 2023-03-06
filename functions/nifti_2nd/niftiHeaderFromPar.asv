@@ -1,0 +1,33 @@
+function hdr = niftiHeaderFromPar(par)
+%create nifti header from par file
+%set fields: image matrix and slice resolution
+%assume 1 for the 4 the dimension
+%
+ %%%TODO calculate real rotation information from angulation
+
+q = [par.img.orient];
+orient = unique([q.slice_orientation]);
+if(numel(orient)~=1)
+    error('Multiple slice orietation in the image');
+end;
+if(orient~=1)
+    error('Currently only support transverse orientation');
+end;
+
+    numSlice = par.max.num_slices;
+    hdr = niftiHdr();
+    [sMat,realVoxelSize,quaternXYZ,quaternBCD,qFac] = parToNiftiMat(par.orient.ang_midslice,par.orient.off_ctr_midslice,[par.scn.recon_res,par.max.num_slices],par.scn.fov,orient);
+    hdr.dime.dim(1) = 4;
+    hdr.dime.dim(2:5) = [par.scn.recon_res(1),par.scn.recon_res(1),numSlice,1];
+    hdr.dime.pixdim(1) = qFac;
+    %to do check acqusition plane, assume axial
+    hdr.dime.pixdim(2:4) = realVoxelSize;
+    %print a warning for non axial acquistion
+    hdr.hist.qform = 1
+    hdr.hist.qform  =0;
+    hdr.hist.sform = 1;
+    hdr.hist.srow_x = [hdr.dime.pixdim(2)*-1,0,0,0];
+    hdr.hist.srow_y = [0,hdr.dime.pixdim(3),0,0];
+    hdr.hist.srow_z = [0,0,hdr.dime.pixdim(4),0];
+    %%%TODO calculate real rotation information from angulation
+return;
