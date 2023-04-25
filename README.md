@@ -53,7 +53,7 @@ Other important parameters worth checking:
 The proposed approach first perform a preliminary reconstruction of the susceptibility map using a single Gaussian to mdoel the noise. Based on the preliminary reconstructin, we can estimate the amount of noise outliers. We then perform the final reconstruction using a two-component Gaussian mixture to model the noise, where the second component is for modelling the noise outliers. Detailed discussions are given in the paper.
 
 
-The QSM pipeline described in `qsm_rec_src.m` mainly contains:
+The QSM pipeline described in `qsm_rec_src_combined.m` and `qsm_rec_src_multi_echo.m` mainly contains:
 
 * 1) Set up the parameters
 * 2) Generate a region-of-interest (ROI) mask using the bet tool
