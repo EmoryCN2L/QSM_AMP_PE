@@ -25,7 +25,7 @@ opt = setoptdefaults(opt,{'writeSF',0,...
                            'TE',16e-3,...
                            'plane','axial'});
                        
-opt.plane = niftiQFormRot(iname);
+%opt.plane = niftiQFormRot(iname);
 
 %iname = 'P93184_phase_unwrap2.img';
 %iname = 'P93184_lapunwrap.img';
@@ -56,7 +56,18 @@ rightpad = paddedSz-orgSz-leftpad;
 inImg = mypadarray(orginImg,leftpad,rightpad,0);
 maskImgPad = mypadarray(maskImg,leftpad,rightpad,0);
 %clear('orginImg');
-D2 = fftn(ifftshift(padarray(ifft123c(GenerateDipoleFT3Drot(ceil(orgSz/2)*2,pixdim,opt.plane)),(paddedSz-ceil(orgSz/2)*2)/2)));%create non-centric kernel
+
+
+B0_dir = opt.plane(3,:);
+if (norm(B0_dir,1)<1.01)
+    dipoleFT = fftshift(dipole_kernel( ceil(orgSz/2)*2, pixdim, B0_dir));
+else
+    dipoleFT = fftshift(dipole_kernel( ceil(orgSz/2)*2, pixdim, B0_dir, 'imagespace'));
+end
+
+D2 = fftn(ifftshift(padarray(ifft123c(dipoleFT),(paddedSz-ceil(orgSz/2)*2)/2)));%create non-centric kernel
+%D2 = fftn(ifftshift(padarray(ifft123c(GenerateDipoleFT3Drot(ceil(orgSz/2)*2,pixdim,opt.plane)),(paddedSz-ceil(orgSz/2)*2)/2)));%create non-centric kernel
+
 
 %% conjugate gradient DP fitting
 A = FuncMatrixAdaptor(@(x) backwardDF(forwardDF(x,maskImgPad,D2),maskImgPad,D2), @(x) forwardDF(backwardDF(x,maskImgPad,D2),maskImgPad,D2));

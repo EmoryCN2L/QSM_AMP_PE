@@ -15,6 +15,7 @@ system(['mkdir -p ', output_dir])   % create the directory incase it was not cre
 
 % the locations of the multi-echo phase images and magnitude images
 % the images should be saved in nifti format, make sure that the header of the nifti file is correct
+% please normalize the phase image if necessary so that it spans a complete cycle: [-pi, pi] or [0,2*pi]
 PhaseImagLoc = 'Please_put_the_phase_image_location_here';
 MagImgLoc = 'Please_put_the_magnitude_image_location_here';
 rotMat = niftiQFormRot(PhaseImagLoc);
@@ -27,26 +28,28 @@ Ne = size(foo.img,4);
 
 mat_sz = [sx sy sz];
 
-voxel_size = [0.6875 0.6875 0.7];   % Ideally, the voxel size should be isotropic for best performance
+voxel_size = [0.6875 0.6875 0.7];   % Ideally, the voxel size should be isotropic
 TE = [7.32 16 24.7 33.39]*1e-3; % echo time for each GRE image, in second
-B0_dir = rotMat(3,:);       % main magnetic field direction, [x,y,z]. When B0_dir is not [0 0 1], the oblique acquisition leads to additional stripping and pixelation effects in the recovered susceptiblity map
+B0_dir = rotMat(3,:);       % main magnetic field direction, [x,y,z]. It is recommended to perform straight acquisiton where B0_dir is [0 0 1]. Oblique acquisition often brings additional artifacts in the recovered susceptiblity map due to the finite approximation of the dipole kernel...
 B0 = 3;                 % magnetic field strength, in Tesla
 gyro_ratio = 42.58;     % gyromagnetic ratio
-pdf_method = 1;         % option 1: use our own PDF implementation; option 2: use the PDF method from the MEDI toolbox. Option 1 produces better results, though a little slower. Option 2 could lead to band artifacts in cases of oblique acquisitions.
+pdf_method = 1;         % option 1: use our own PDF implementation; option 2: use the PDF method from the MEDI toolbox. Option 1 performs zero-padding of the image before Fourier transform and produces better results, though a bit slower. Option 2 sometimes produce strange banding artifacts...
 pdf_ite = 100;          % the number of PDF iterations, which should be be at least 100 when option 1 is used and 200 when option 2 is used. It can be increased to improve the results a little bit
 pdf_tol = 1e-3;         % the convergence threshold for PDF
 erosion_width_1 = 2;    % the first erosion width to remove low-SNR voxels
 erosion_width_2 = 3;    % the second erosion width to the voxels at the boundary of ROI after PDF
 
+simulated_TE = 8*1e-3;       % the chosen TE (in second) used to simulate the phase image (in radian) from the averaged local fields (in Hz)
+
 nlevel = 3;     % the number of levels in the wavelet tranform, ususally 3-4 is enough
-wave_idx = 2;   % the order of the Daubechies wavelets, the db2 wavelet basis is recommended for QSM. Higher-order wavelet bases could capture more high-frequency info from the streaking artifacts
+wave_idx = 2;   % the order of the Daubechies wavelets, the db2 wavelet basis is recommended for QSM. You can also try the db1 wavelet basis by setting wave_idx to 1. Higher-order wavelet bases could capture more high-frequency info from the streaking artifacts and are not recommended.
 wave_pec = 0.85;    % the percentage threshold (with respect to the l1-norm of wavelet coefficients) used to generate the morphology mask for wavelet coefficients, so that anatomical information could be incorporated into reconstruction. the higherer the wave_pec, the more high-frequency information is retained.
 max_linearization_ite = 25;  % the maximum number of linearization steps to linearize the complex exponential measurement mdoel
 
 l2beta_reg = 2e-2;      % regularization parameter for the l2-norm minimization solution that is used to initialize the distribution parameters only
 
-damp_rate_sig = 0.01;   % damp rate for the signal update
-damp_rate_par = 0.1;    % damp rate for the parameter estimation
+damp_rate_sig = 0.01;   % damp rate for the signal update. If the algorithm does not converge, try decreasing the damp_rate
+damp_rate_par = 0.1;    % damp rate for the parameter estimation.  If the algorithm does not converge, try decreasing the damp_rate
 gamp_cvg_thd = 1e-6;    % convergence rate of the AMP updates
 max_pe_spar_ite = 5;    % maximum number of iterations for the linear AMP updates
 max_pe_est_ite = 5;     % maximum number of iterations for the parameter estimation updates
@@ -88,16 +91,26 @@ iField_phase_unwrap = zeros(size(iField_phase));
 for (i=1:size(iField_phase,4))
     iField_phase_unwrap(:,:,:,i) = UnwrapPhase_3DBestPath_voxelsize(iField_phase(:,:,:,i), mask, mat_sz, voxel_size);
 end
-iFreq = iField_phase_unwrap;
+
+% compute the local fields in Hz for each echo, then compute the averaged local field
+
+iFreq_unwrap = zeros(size(iField_phase));
+for (i=1:size(iField_phase_unwrap,4))
+    iFreq_unwrap(:,:,:,i) = iField_phase_unwrap(:,:,:,i) / TE(i);
+end
+iFreq_unwrap = sum(iFreq_unwrap,4)/size(iFreq_unwrap,4);
+
+% multiply the averaged local field iFreq_unwrap with a chosen TE to generate the simulated phase image
+iField_unwrap = iFreq_unwrap * simulated_TE;
 
 
 %%%%%%%%%%%%%%%%%
 %% perform PDF %%
 %%%%%%%%%%%%%%%%%
 
-% option 1: use PDF from our implementation
-% option 2: use PDF from the MEDI toolbox
-% the number of iterations should be at least 100
+% option 1: use PDF from our implementation where zero-padding of the image before Fourier transform, it produces better results but is slower
+% option 2: use PDF from the MEDI toolbox, it is faster but sometimes produces strage banding artifacts
+% the number of iterations should be at least 100 when option 1 is used and 200 when option 2 is used.
 
 if (pdf_method == 1)
 
@@ -108,24 +121,23 @@ if (pdf_method == 1)
     opt.writeSF = 1;
     opt.B0 = B0;
     opt.num_iter = pdf_ite;
+    opt.plane = rotMat;
 
-    PDF_echo = zeros(size(iField_phase_unwrap));
-    for (i=1:size(iField_phase_unwrap,4))
-        niftiSaveNii(foo.hdr, iField_phase_unwrap(:,:,:,i), strcat(output_dir, 'unwrapped_phase_e',num2str(i),'.nii'));
-        opt.TE = TE(i);
-        Dipole_fitting(strcat(output_dir, 'unwrapped_phase_e',num2str(i),'.nii'), strcat(output_dir,'mask_initial.nii'), strcat(output_dir, 'BG_removed_phase_e',num2str(i),'.img'), opt);
-        goo = niftiLoadNii(strcat(output_dir, 'BG_removed_phase_e', num2str(i), '.img'));
-        PDF_echo(:,:,:,i) = goo.img;
-    end
+
+    niftiSaveNii(foo.hdr, iField_unwrap, strcat(output_dir, 'unwrapped_phase_e.nii'));
+    opt.TE = simulated_TE;
+    Dipole_fitting(strcat(output_dir, 'unwrapped_phase_e.nii'), strcat(output_dir,'mask_initial.nii'), strcat(output_dir, 'BG_removed_phase_e.img'), opt);
+    goo = niftiLoadNii(strcat(output_dir, 'BG_removed_phase_e.img'));
+    PDF_echo= goo.img;
 
 else
-
-    PDF_echo = zeros(size(iField_phase_unwrap));
-    for (i=1:size(iField_phase_unwrap,4))
-        PDF_echo(:,:,:,i) = PDF(iField_phase_unwrap(:,:,:,i), N_std, mask, mat_sz, voxel_size, B0_dir, pdf_tol, pdf_ite);
-    end
+    
+    PDF_echo = PDF(iField_unwrap, N_std, mask, mat_sz, voxel_size, B0_dir, pdf_tol, pdf_ite);
 
 end
+
+% change TE to simulated_TE to be consistent
+TE = simulated_TE;
 
 mask_ori = mask;
 % Apply a second erosion to remove inaccurate voxels close to the boundary
@@ -367,7 +379,7 @@ for (iter = 1:max_linearization_ite)
     phase_image_updated = weight_vect .* (der_1st.*A_X_init+exp(1i*phase_image)-exp(1i*A_X_init));
 
     % use AMP-PE to recover the susceptibility under the linearized model
-    [res, input_par_new, output_par_new] = gamp_mri_qsm_awgn(A_qsm_weighted_nw_combine_real, A_wav_single_3d, phase_image_updated, gamp_par, input_par, output_par);
+    [res, input_par_new, output_par_new] = amp_pe_mri_qsm_awgn(A_qsm_weighted_nw_combine_real, A_wav_single_3d, phase_image_updated, gamp_par, input_par, output_par);
 
     % the susceptibility initialization for the next iteration
     X_init_pre = X_init;
@@ -387,10 +399,10 @@ end
 QSM_step1 = res.x_hat_meas;
 QSM_step1(mask==0) = 0;
 
-save(strcat(output_dir, 'QSM_db',num2str(wave_idx),'_l',num2str(level_num),'_',num2str(wave_pec*100),'_step1.mat'), 'QSM_step1', '-v7.3')
-save(strcat(output_dir, 'res_wave_db',num2str(wave_idx),'_l',num2str(level_num),'_',num2str(wave_pec*100),'_step1.mat'), 'res', '-v7.3')
-save(strcat(output_dir, 'input_par_wave_db',num2str(wave_idx),'_l',num2str(level_num),'_',num2str(wave_pec*100),'_step1.mat'), 'input_par_new', '-v7.3')
-save(strcat(output_dir, 'output_par_wave_db',num2str(wave_idx),'_l',num2str(level_num),'_',num2str(wave_pec*100),'_step1.mat'), 'output_par_new', '-v7.3')
+save(strcat(output_dir, 'QSM_db',num2str(wave_idx),'_l',num2str(nlevel),'_',num2str(wave_pec*100),'_step1.mat'), 'QSM_step1', '-v7.3')
+save(strcat(output_dir, 'res_wave_db',num2str(wave_idx),'_l',num2str(nlevel),'_',num2str(wave_pec*100),'_step1.mat'), 'res', '-v7.3')
+save(strcat(output_dir, 'input_par_wave_db',num2str(wave_idx),'_l',num2str(nlevel),'_',num2str(wave_pec*100),'_step1.mat'), 'input_par_new', '-v7.3')
+save(strcat(output_dir, 'output_par_wave_db',num2str(wave_idx),'_l',num2str(nlevel),'_',num2str(wave_pec*100),'_step1.mat'), 'output_par_new', '-v7.3')
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -496,7 +508,7 @@ for (iter = 1:max_linearization_ite)
     phase_image_updated = weight_vect .* (der_1st.*A_X_init+exp(1i*phase_image)-exp(1i*A_X_init));
 
     % use AMP-PE to recover the susceptibility under the linearized model
-    [res, input_par_new, output_par_new] = gamp_mri_qsm_awgn_mix(A_qsm_weighted_nw_combine_real, A_wav_single_3d, phase_image_updated, gamp_par, input_par, output_par);
+    [res, input_par_new, output_par_new] = amp_pe_mri_qsm_awgn_mix(A_qsm_weighted_nw_combine_real, A_wav_single_3d, phase_image_updated, gamp_par, input_par, output_par);
 
     % the susceptibility initialization for the next iteration
     X_init_pre = X_init;
@@ -516,10 +528,10 @@ end
 QSM_step2 = res.x_hat_meas;
 QSM_step2(mask==0) = 0;
 
-save(strcat(output_dir, 'QSM_db',num2str(wave_idx),'_l',num2str(level_num),'_',num2str(wave_pec*100),'_step2.mat'), 'QSM_step2', '-v7.3')
-save(strcat(output_dir, 'res_wave_db',num2str(wave_idx),'_l',num2str(level_num),'_',num2str(wave_pec*100),'_step2.mat'), 'res', '-v7.3')
-save(strcat(output_dir, 'input_par_wave_db',num2str(wave_idx),'_l',num2str(level_num),'_',num2str(wave_pec*100),'_step2.mat'), 'input_par_new', '-v7.3')
-save(strcat(output_dir, 'output_par_wave_db',num2str(wave_idx),'_l',num2str(level_num),'_',num2str(wave_pec*100),'_step2.mat'), 'output_par_new', '-v7.3')
+save(strcat(output_dir, 'QSM_db',num2str(wave_idx),'_l',num2str(nlevel),'_',num2str(wave_pec*100),'_step2.mat'), 'QSM_step2', '-v7.3')
+save(strcat(output_dir, 'res_wave_db',num2str(wave_idx),'_l',num2str(nlevel),'_',num2str(wave_pec*100),'_step2.mat'), 'res', '-v7.3')
+save(strcat(output_dir, 'input_par_wave_db',num2str(wave_idx),'_l',num2str(nlevel),'_',num2str(wave_pec*100),'_step2.mat'), 'input_par_new', '-v7.3')
+save(strcat(output_dir, 'output_par_wave_db',num2str(wave_idx),'_l',num2str(nlevel),'_',num2str(wave_pec*100),'_step2.mat'), 'output_par_new', '-v7.3')
 
 figure; imshow3D(QSM_step2,[-0.1,0.1])
 
