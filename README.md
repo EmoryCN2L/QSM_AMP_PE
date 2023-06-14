@@ -34,10 +34,10 @@ Please try the first way first. The first way is faster since it uses data from 
 
 ## Parameter setting
 
-**Wavelet basis**: Choosing an apropriate wavelet basis is important. We usually use the `db1` or `db2` basis for QSM. The best choice typically depends on whether it is a straight or oblique scan.  Generally speaking,
+**Wavelet basis**: Choosing an apropriate wavelet basis is important. We usually use the `db1` or `db2` basis for QSM. The best choice empirically depends on whether it is a straight or oblique scan.  Generally speaking,
 
- 1) When the B0 direction is [0 0 1] or close to [0 0 1], the db1 wavelet basis would perform as well or better than the db2 basis.
- 2) When the B0 direction is tilted and far from [0 0 1], due to the approximation of dipole kernel, the db1 basis leads to pixelation artifacts, and the db2 basis is better.
+ 1) When the B0 direction is [0 0 1] or close to [0 0 1], the db1 wavelet basis would perform as well as or better than the db2 basis.
+ 2) When the B0 direction is tilted and far from [0 0 1], sometimes the db1 basis leads to pixelation artifacts due to the approximation of dipole kernel.
 
 It is thus recommend to run experiments with both the db1 and db2 bases, and see which one performs better for your specific dataset. 
 
