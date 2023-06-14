@@ -17,7 +17,7 @@ system(['mkdir -p ', output_dir])   % create the directory incase it was not cre
 % the images should be saved in nifti format, make sure that the header of the nifti file is correct
 % please normalize the phase image if necessary so that it spans a complete cycle: [-pi, pi] or [0,2*pi]
 PhaseImagLoc = 'Please_put_the_phase_image_location_here';
-MagImgLoc = 'Please_put_the_magnitude_image_location_here';
+MagImagLoc = 'Please_put_the_magnitude_image_location_here';
 rotMat = niftiQFormRot(PhaseImagLoc);
 foo = niftiLoadNii(PhaseImagLoc);
 
@@ -30,6 +30,7 @@ mat_sz = [sx sy sz];
 
 voxel_size = [0.6875 0.6875 0.7];   % Ideally, the voxel size should be isotropic
 TE = [7.32 16 24.7 33.39]*1e-3; % echo time for each GRE image, in second
+simulated_TE = 8*1e-3;       % the chosen TE (in second) used to simulate the phase image (in radian) from the averaged local fields (in Hz)
 B0_dir = rotMat(3,:);       % main magnetic field direction, [x,y,z]. It is recommended to perform straight acquisiton where B0_dir is [0 0 1]. Oblique acquisition often brings additional artifacts in the recovered susceptiblity map due to the finite approximation of the dipole kernel...
 B0 = 3;                 % magnetic field strength, in Tesla
 gyro_ratio = 42.58;     % gyromagnetic ratio
@@ -37,12 +38,12 @@ pdf_method = 1;         % option 1: use our own PDF implementation; option 2: us
 pdf_ite = 100;          % the number of PDF iterations, which should be be at least 100 when option 1 is used and 200 when option 2 is used. It can be increased to improve the results a little bit
 pdf_tol = 1e-3;         % the convergence threshold for PDF
 erosion_width_1 = 2;    % the first erosion width to remove low-SNR voxels
-erosion_width_2 = 3;    % the second erosion width to the voxels at the boundary of ROI after PDF
+erosion_width_2 = 2;    % the second erosion width to the voxels at the boundary of ROI after PDF
 
-simulated_TE = 8*1e-3;       % the chosen TE (in second) used to simulate the phase image (in radian) from the averaged local fields (in Hz)
+
 
 nlevel = 3;     % the number of levels in the wavelet tranform, ususally 3-4 is enough
-wave_idx = 2;   % the order of the Daubechies wavelets, the db2 wavelet basis is recommended for QSM. You can also try the db1 wavelet basis by setting wave_idx to 1. Higher-order wavelet bases could capture more high-frequency info from the streaking artifacts and are not recommended.
+wave_idx = 1;   % the order of the Daubechies wavelets, the db2 wavelet basis is recommended for QSM. You can also try the db1 wavelet basis by setting wave_idx to 1. Higher-order wavelet bases could capture more high-frequency info from the streaking artifacts and are not recommended.
 wave_pec = 0.85;    % the percentage threshold (with respect to the l1-norm of wavelet coefficients) used to generate the morphology mask for wavelet coefficients, so that anatomical information could be incorporated into reconstruction. the higherer the wave_pec, the more high-frequency information is retained.
 max_linearization_ite = 25;  % the maximum number of linearization steps to linearize the complex exponential measurement mdoel
 
@@ -58,7 +59,7 @@ max_pe_est_ite = 5;     % maximum number of iterations for the parameter estimat
 %% Pre-processing %%
 %%%%%%%%%%%%%%%%%%%%
 
-foo = niftiLoadNii(MagImgLoc);
+foo = niftiLoadNii(MagImagLoc);
 magnitude_image = double(foo.img);
 
 % make sure the phase image spans a complete cycle: [-pi, pi] or [0,2*pi]
@@ -70,10 +71,12 @@ iField = magnitude_image.*exp(1i*phase_image);
 % Estimate the frequency offset in each of the voxel using a complex fitting
 [iFreq_raw N_std relres initial_phase] = Fit_ppm_complex_TE(iField,TE);
 
-% Computed a weighted magnitude image, it will be used to generate the morphology mask for wavelet coefficients
-iMag = sqrt(sum(abs(iField).^2,4));
-% Generate a brain mask
-mask = BET(iMag,mat_sz,voxel_size);
+% Computed a *weighted* magnitude image, it will be used to generate the morphology mask for wavelet coefficients
+iMagWtd = sqrt(sum(abs(iField).^2,4));
+% The default threshold of BET is 0.5, if it does not produce a good brain mask, try changing the threshold 
+mask = BET(iMagWtd,mat_sz,voxel_size);
+%mask = BET(iMagWtd,mat_sz,voxel_size, 0.5);
+
 % Apply a small erosion to remove low SNR voxels
 mask = MaskErode(mask, mat_sz, voxel_size, erosion_width_1);
 
@@ -159,6 +162,7 @@ phase_image_ori = phase_image;
 phase_image = phase_image_new;
 
 % multi-echo magnitude image is used to weight the complex expnential measurements
+% every column of magnitude_image only contains voxel values within the mask and corresponds to an echo time
 magnitude_image_new = zeros(sum(mask,'all'),length(TE));
 for (i=1:size(magnitude_image_new,2))
     magnitude_image_tmp = magnitude_image(:,:,:,i);
@@ -270,15 +274,16 @@ E_coef = @(in) extract_3d_wav_coef(in);
 C_struct = @(in) construct_3d_wav_struct(in, wav_vessel);
 
 % Generate a morphology mask for the wavelet coefficients to incorporate anatomical structural information
-iMag_with_mask = iMag;
-iMag_with_mask(mask==0) = 0;
-iMag_with_mask_wavelet = E_coef(Psi(iMag_with_mask));
-iMag_with_mask_wavelet_abs_sort = sort(abs(iMag_with_mask_wavelet), 'descend');
-iMag_with_mask_wavelet_abs_sort_cumsum = cumsum(iMag_with_mask_wavelet_abs_sort)/sum(iMag_with_mask_wavelet_abs_sort);
+% iMagWtd is the weighted magnitude image
+iMagWtd_with_mask = iMagWtd;
+iMagWtd_with_mask(mask==0) = 0;
+iMagWtd_with_mask_wavelet = E_coef(Psi(iMagWtd_with_mask));
+iMagWtd_with_mask_wavelet_abs_sort = sort(abs(iMagWtd_with_mask_wavelet), 'descend');
+iMagWtd_with_mask_wavelet_abs_sort_cumsum = cumsum(iMagWtd_with_mask_wavelet_abs_sort)/sum(iMagWtd_with_mask_wavelet_abs_sort);
 
-iMag_with_mask_wavelet_abs_sort_thd = iMag_with_mask_wavelet_abs_sort(length(iMag_with_mask_wavelet_abs_sort_cumsum(iMag_with_mask_wavelet_abs_sort_cumsum<=wave_pec)));
-wave_mask = zeros(length(iMag_with_mask_wavelet_abs_sort),1);
-wave_mask(abs(iMag_with_mask_wavelet)>iMag_with_mask_wavelet_abs_sort_thd) = 1;
+iMagWtd_with_mask_wavelet_abs_sort_thd = iMagWtd_with_mask_wavelet_abs_sort(length(iMagWtd_with_mask_wavelet_abs_sort_cumsum(iMagWtd_with_mask_wavelet_abs_sort_cumsum<=wave_pec)));
+wave_mask = zeros(length(iMagWtd_with_mask_wavelet_abs_sort),1);
+wave_mask(abs(iMagWtd_with_mask_wavelet)>iMagWtd_with_mask_wavelet_abs_sort_thd) = 1;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% preliminary reconstruction via AMP-PE with one Gaussian component %%
